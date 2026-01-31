@@ -1,3 +1,4 @@
+use egui::RichText;
 use nih_plug::plugin::vst3::Vst3Plugin; // Импортируем Vst3Plugin
 use nih_plug::prelude::*; // Импортируем все необходимые трейты и типы из nih-plug [16]
 use nih_plug::wrapper::vst3::subcategories::Vst3SubCategory; // Импортируем Vst3SubCategory из правильного пути
@@ -8,6 +9,7 @@ use std::sync::Arc;
 mod utils;
 mod wav_reader;
 mod wf_params;
+mod zero_crossing_detector;
 
 struct WF {
     params: Arc<wf_params::WFParams>,
@@ -15,6 +17,9 @@ struct WF {
     // Используем RwLock вместо ArcSwap для стабильности в Ardour
     custom_waveform: Arc<RwLock<Arc<Vec<f32>>>>,
     editor_state: Arc<EguiState>,
+    zero_crossing_points: Arc<RwLock<Vec<f32>>>,
+    zc_input_buffer: Arc<RwLock<String>>,
+    trunked_val: Arc<RwLock<usize>>,
 }
 
 impl Default for WF {
@@ -28,6 +33,9 @@ impl Default for WF {
             last_open_file_state: false,
             custom_waveform: Arc::new(RwLock::new(Arc::new(default_table))),
             editor_state: EguiState::from_size(740, 475),
+            zero_crossing_points: Arc::new(RwLock::new(vec![0.5])),
+            zc_input_buffer: Arc::new(RwLock::new(String::new())),
+            trunked_val: Arc::new(RwLock::new(0)),
         }
     }
 }
@@ -70,18 +78,17 @@ impl Plugin for WF {
         _buffer_config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
+        self.zc_input_buffer = Arc::new(RwLock::new(String::new()));
+        self.trunked_val = Arc::new(RwLock::new(0));
         self.last_open_file_state = false;
 
-        // 1. Быстро ставим дефолтную таблицу (на случай, если файл не загрузится)
         let default_table = (0..2048)
             .map(|s| s as f32 / 1024.0 - 1.0)
             .collect::<Vec<_>>();
         *self.custom_waveform.write() = Arc::new(default_table);
-
-        // 2. А вот ТЯЖЕЛУЮ задачу загрузки файла из пути — в фон
+        *self.zero_crossing_points.write() = vec![0.5];
         let path = self.params.waveform_path.read().clone();
         if !path.is_empty() {
-            // Используем execute_background, а не execute!
             context.execute(WFBackgroundTask::LoadFileNoDialog);
         }
 
@@ -96,9 +103,8 @@ impl Plugin for WF {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Безопасное чтение таблицы из RwLock
         let table_lock = self.custom_waveform.read();
-        let custom_table = &**table_lock; // Получаем &[f32]
+        let custom_table = &**table_lock; // &[f32]
 
         for channel_samples in buffer.as_slice() {
             for sample in channel_samples.iter_mut() {
@@ -127,14 +133,18 @@ impl Plugin for WF {
     fn task_executor(&mut self) -> TaskExecutor<Self> {
         let params = self.params.clone();
         let custom_waveform = self.custom_waveform.clone();
-
+        let zero_crossing_points = self.zero_crossing_points.clone();
         Box::new(move |task| {
             match task {
                 WFBackgroundTask::LoadFileNoDialog => {
                     let path_str = params.waveform_path.read().clone();
                     if !path_str.is_empty() {
                         // Здесь вызываем загрузку (внутри будет lock.write())
-                        wav_reader::process_wav_from_path(&path_str, &custom_waveform);
+                        wav_reader::process_wav_from_path(
+                            &path_str,
+                            &custom_waveform,
+                            &zero_crossing_points,
+                        );
                     }
                 }
                 WFBackgroundTask::LoadFile => {
@@ -143,7 +153,11 @@ impl Plugin for WF {
                         .pick_file()
                     {
                         let path_str = path.to_string_lossy().into_owned();
-                        wav_reader::process_wav_from_path(&path_str, &custom_waveform);
+                        wav_reader::process_wav_from_path(
+                            &path_str,
+                            &custom_waveform,
+                            &zero_crossing_points,
+                        );
                         *params.waveform_path.write() = path_str;
                     }
                 }
@@ -153,7 +167,20 @@ impl Plugin for WF {
 
     fn editor(&mut self, async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
-        let waveform_arc = self.custom_waveform.clone(); // Для визуализации
+        let waveform_arc = self.custom_waveform.clone();
+        let zc_points_arc = self.zero_crossing_points.clone();
+        let string_buffer_arc = self.zc_input_buffer.clone();
+        let trunked_value_arc = self.trunked_val.clone();
+
+        const ZERO_CROSSING_LINE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);
+        const ZERO_CROSSING_CHOOSED_LINE_COLOR: egui::Color32 =
+            egui::Color32::from_rgb(128, 128, 255);
+        const ZERO_CROSSING_LINE_TEXT_COLOR: egui::Color32 = egui::Color32::from_rgb(127, 255, 127);
+        const ZERO_CROSSING_CHOOSED_LINE_TEXT_COLOR: egui::Color32 =
+            egui::Color32::from_rgb(255, 255, 128);
+        const GRAPH_LINE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);
+        const POSITIVE_COLOR: egui::Color32 = egui::Color32::from_rgb(0, 240, 0);
+        const NEGATIVE_COLOR: egui::Color32 = egui::Color32::from_rgb(240, 0, 0);
 
         create_egui_editor(
             self.editor_state.clone(),
@@ -180,13 +207,14 @@ impl Plugin for WF {
                     let painter = ui.painter_at(rect);
 
                     // Фон графика
-                    painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(5));
+                    painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(30));
 
                     // Читаем данные из RwLock
 
                     let table_guard = waveform_arc.read(); // Блокируем один раз
                     let samples = &**table_guard; // Разыменовываем до &[f32]
-
+                    let zc_points = zc_points_arc.read();
+                    let mut trunked_val = trunked_value_arc.write();
                     if !samples.is_empty() {
                         let mid_y = rect.center().y;
                         let height_scale = rect.height() * 0.4;
@@ -216,10 +244,8 @@ impl Plugin for WF {
                         );
 
                         // --- 2. ПОИСК НУЛЕЙ И ОТРИСОВКА ПУРПУРНЫХ ОСЕЙ ---
-                        const ZERO_CROSSING_LINE_COLOR : egui::Color32= egui::Color32::from_rgb(255, 0, 255);
-                        const ZERO_CROSSING_LINE_TEXT_COLOR : egui::Color32= egui::Color32::from_rgb(127, 255, 127); 
+
                         let mut points = Vec::with_capacity(width as usize);
-                        let mut last_val = utils::lookup_custom(samples, 0.0);
 
                         for i in 0..width as usize {
                             let t = (i as f32 / width) * 4.0;
@@ -228,35 +254,83 @@ impl Plugin for WF {
                             let x = rect.left() + i as f32;
                             let y = mid_y - (sample * height_scale);
                             points.push(egui::pos2(x, y));
+                        }
 
-                            // Детекция перехода через ноль (смена знака)
-                            if (last_val > 0.0 && sample <= 0.0)
-                                || (last_val < 0.0 && sample >= 0.0)
+
+                        for (index, &val) in zc_points.iter().enumerate() {
                             {
+                                let x = rect.left() + val * rect.width();
                                 // Рисуем вертикальную линию
                                 painter.line_segment(
                                     [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                                    egui::Stroke::new(1.0, ZERO_CROSSING_LINE_COLOR.linear_multiply(0.5)),
+                                    egui::Stroke::new(
+                                        1.0,
+                                        if index == *trunked_val {
+                                            ZERO_CROSSING_CHOOSED_LINE_COLOR
+                                        } else {
+                                            ZERO_CROSSING_LINE_COLOR
+                                        }
+                                        .linear_multiply(0.5),
+                                    ),
                                 );
 
                                 // Подписываем градусы
-                                let degrees = (t * 90.0).round() as i32;
+                                let degrees = (val * 360.0).round() as i32;
                                 painter.text(
                                     egui::pos2(x, rect.bottom() - 5.0),
                                     egui::Align2::CENTER_BOTTOM,
                                     format!("{}°", degrees),
                                     egui::FontId::monospace(9.0),
-                                    ZERO_CROSSING_LINE_TEXT_COLOR,
+                                    if index == *trunked_val {
+                                            ZERO_CROSSING_CHOOSED_LINE_TEXT_COLOR
+                                        } else {
+                                            ZERO_CROSSING_LINE_TEXT_COLOR
+                                        },
                                 );
                             }
-                            last_val = sample;
                         }
 
                         // --- 3. САМА ЛИНИЯ ГРАФИКА ---
                         painter.add(egui::Shape::line(
                             points,
-                            egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 0, 0)),
+                            egui::Stroke::new(2.0, GRAPH_LINE_COLOR),
                         ));
+                    }
+
+                    ui.add_space(10.0);
+
+                    // --- ВЫБОР ТОЧКИ ФАЗЫ ---
+                    if !zc_points.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label("Snap Phase to:");
+                            let mut string_buffer = string_buffer_arc.write();
+                            ui.text_edit_singleline(&mut *string_buffer);
+                            if let Ok(val) = string_buffer.parse::<isize>() {
+                                ui.label(
+                                    RichText::new("A correct value was entered")
+                                        .color(POSITIVE_COLOR),
+                                );
+                                *trunked_val = if val < 0 {
+                                    0
+                                } else if val > zc_points.len() as isize - 1 {
+                                    zc_points.len()
+                                } else {
+                                    val as usize
+                                };
+                            } else {
+                                ui.label(
+                                    RichText::new("A incorrect value was entered")
+                                        .color(NEGATIVE_COLOR),
+                                );
+                            }
+
+                            if ui.button("SNAP!").clicked() {
+                                let val = zc_points.get(*trunked_val).unwrap_or(&0.0) * 360.0;
+                                setter.begin_set_parameter(&params.phase);
+                                setter.set_parameter(&params.phase, val);
+                                setter.end_set_parameter(&params.phase);
+                            }
+                        });
                     }
 
                     ui.add_space(15.0);

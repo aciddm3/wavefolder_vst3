@@ -85,15 +85,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "170433209e817da6aae2c51aa0dd443009a613425dd041ebfb2492d1c4c11a25"
 
 [[package]]
-name = "arc-swap"
-version = "1.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d03449bb8ca2cc2ef70869af31463d1ae5ccc8fa3e334b307203fbf815207e"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "as-raw-xcb-connection"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1687,12 +1678,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rnd"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68e419b1e585e7097f4644ae87c2b76817c120c6a68a92385b2a198948d5bd5b"
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2179,7 +2164,6 @@ dependencies = [
 name = "wavefolder"
 version = "0.4.0"
 dependencies = [
- "arc-swap",
  "egui",
  "hound",
  "nih_plug",
@@ -2187,7 +2171,6 @@ dependencies = [
  "nih_plug_egui",
  "parking_lot",
  "rfd",
- "rnd",
  "serde",
  "serde_json",
 ]

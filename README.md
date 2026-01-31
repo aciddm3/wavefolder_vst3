@@ -28,3 +28,10 @@ Each has period of 4.
 You can load a function table from a .wav file. The function will have period of 4.
 
 There is graph of the function. You may see zero-crossing points of function and choose it as a phase of the function.
+
+## TODO
+
+- [ ] Add sample edit features
+- [ ] Add other formats support (.flac, .ogg, .mp3)
+- [ ] Add other interpolation methods
+- [ ] Add better phase visualization

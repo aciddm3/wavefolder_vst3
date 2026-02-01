@@ -173,11 +173,9 @@ impl Plugin for WF {
         let trunked_value_arc = self.trunked_val.clone();
 
         const ZERO_CROSSING_LINE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);
-        const ZERO_CROSSING_CHOOSED_LINE_COLOR: egui::Color32 =
-            egui::Color32::from_rgb(128, 128, 255);
+        const PHASE_LINE_COLOR: egui::Color32 = egui::Color32::from_rgb(128, 128, 255);
         const ZERO_CROSSING_LINE_TEXT_COLOR: egui::Color32 = egui::Color32::from_rgb(127, 255, 127);
-        const ZERO_CROSSING_CHOOSED_LINE_TEXT_COLOR: egui::Color32 =
-            egui::Color32::from_rgb(255, 255, 128);
+        const PHASE_LINE_TEXT_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 255, 128);
         const GRAPH_LINE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);
         const POSITIVE_COLOR: egui::Color32 = egui::Color32::from_rgb(0, 240, 0);
         const NEGATIVE_COLOR: egui::Color32 = egui::Color32::from_rgb(240, 0, 0);
@@ -256,8 +254,7 @@ impl Plugin for WF {
                             points.push(egui::pos2(x, y));
                         }
 
-
-                        for (index, &val) in zc_points.iter().enumerate() {
+                        for &val in zc_points.iter() {
                             {
                                 let x = rect.left() + val * rect.width();
                                 // Рисуем вертикальную линию
@@ -265,12 +262,7 @@ impl Plugin for WF {
                                     [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
                                     egui::Stroke::new(
                                         1.0,
-                                        if index == *trunked_val {
-                                            ZERO_CROSSING_CHOOSED_LINE_COLOR
-                                        } else {
-                                            ZERO_CROSSING_LINE_COLOR
-                                        }
-                                        .linear_multiply(0.5),
+                                        ZERO_CROSSING_LINE_COLOR.linear_multiply(0.5),
                                     ),
                                 );
 
@@ -281,13 +273,32 @@ impl Plugin for WF {
                                     egui::Align2::CENTER_BOTTOM,
                                     format!("{}°", degrees),
                                     egui::FontId::monospace(9.0),
-                                    if index == *trunked_val {
-                                            ZERO_CROSSING_CHOOSED_LINE_TEXT_COLOR
-                                        } else {
-                                            ZERO_CROSSING_LINE_TEXT_COLOR
-                                        },
+                                    ZERO_CROSSING_LINE_TEXT_COLOR,
                                 );
                             }
+                        }
+
+                        {
+                            let val = params.phase.value() / 360.0;
+                            let x = rect.left() + val * rect.width();
+                            // Рисуем вертикальную линию
+                            painter.line_segment(
+                                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                                egui::Stroke::new(
+                                    1.0,
+                                    PHASE_LINE_COLOR.linear_multiply(0.5),
+                                ),
+                            );
+
+                            // Подписываем градусы
+                            let degrees = (val * 360.0).round() as i32;
+                            painter.text(
+                                egui::pos2(x, rect.bottom() - 5.0),
+                                egui::Align2::CENTER_BOTTOM,
+                                format!("{}°", degrees),
+                                egui::FontId::monospace(9.0),
+                                PHASE_LINE_TEXT_COLOR,
+                            );
                         }
 
                         // --- 3. САМА ЛИНИЯ ГРАФИКА ---

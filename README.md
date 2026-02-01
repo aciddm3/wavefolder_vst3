@@ -16,7 +16,7 @@ $I$ is the signal input
 
 There are 4 basic functions:
 
-- sin
+- sine
 - triangle
 - sawtooth
 - square

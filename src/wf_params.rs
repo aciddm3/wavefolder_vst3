@@ -1,7 +1,11 @@
 use nih_plug::prelude::*;
 
+use nih_plug_egui::EguiState;
 use parking_lot::RwLock;
 use std::sync::Arc;
+
+pub const MAX_GAIN: f32 = 120.0;
+pub const MIN_GAIN: f32 = -60.0;
 
 #[derive(Params)]
 pub struct WFParams {
@@ -13,8 +17,12 @@ pub struct WFParams {
     pub dw: FloatParam,
     #[id = "waveform"]
     pub waveform: IntParam,
+    #[id = "interpolation_method"]
+    pub interpolation_method: IntParam,
     #[persist = "waveform_path"]
     pub waveform_path: RwLock<String>,
+    #[persist = "editor-state"]
+    pub editor_state: Arc<EguiState>,
 }
 
 impl Default for WFParams {
@@ -24,8 +32,8 @@ impl Default for WFParams {
                 "Drive",
                 0.0,
                 FloatRange::Linear {
-                    min: -60.0,
-                    max: 120.0,
+                    min: MIN_GAIN,
+                    max: MAX_GAIN,
                 },
             )
             .with_unit("dB"),
@@ -51,7 +59,21 @@ impl Default for WFParams {
                     }
                     .to_string()
                 })),
+            interpolation_method: IntParam::new(
+                "Interpolation_method",
+                0,
+                IntRange::Linear { min: 0, max: 1 },
+            )
+            .with_value_to_string(Arc::new(|s| {
+                match s {
+                    0 => "Linear",
+                    1 => "Cosine",
+                    _ => "Err",
+                }
+                .to_string()
+            })),
             waveform_path: RwLock::new(String::new()),
+            editor_state: EguiState::from_size(740, 475),
         }
     }
 }

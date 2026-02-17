@@ -3,7 +3,7 @@ pub fn db_to_gain(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 #[inline]
-pub fn lookup_custom(table: &[f32], x: f32) -> f32 {
+pub fn lookup_custom(table: &[f32], x: f32, interpolation_method : i32) -> f32 {
     if !x.is_finite() {
         return 0.0;
     }
@@ -28,13 +28,19 @@ pub fn lookup_custom(table: &[f32], x: f32) -> f32 {
     };
 
     let fract = index_f - index_f.floor();
-
-    table[index_low] * (1.0 - fract) + table[index_high] * fract
+    let (l, h) = (table[index_low], table[index_high]);
+    
+    l + (h - l) * match interpolation_method {
+        0 => fract,
+        1 => (-(fract*std::f32::consts::PI).cos() + 1.0) / 2.0,
+        _ => fract,
+    }
 }
 
 #[inline]
 pub fn triangle(mut x: f32) -> f32 {
-    x %= 4.0;
+    x = x.rem_euclid(4.0);
+
     if x > 2.0 {
         x -= 4.0;
     };

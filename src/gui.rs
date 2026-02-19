@@ -1,3 +1,4 @@
+use egui::Color32;
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, widgets};
 
@@ -7,8 +8,10 @@ const ZERO_CROSSING_LINE_TEXT_COLOR: egui::Color32 = egui::Color32::from_rgb(127
 const PHASE_LINE_COLOR: egui::Color32 = egui::Color32::from_rgb(128, 128, 255);
 const GRAPH_LINE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);
 
-use crate::wf_background_task::WFBackgroundTask;
+const GRAPH_HEIGHT: f32 = 120.0;
+
 use crate::utils;
+use crate::wf_background_task::WFBackgroundTask;
 use crate::wf_struct::WF;
 
 impl WF {
@@ -23,39 +26,51 @@ impl WF {
             move |egui_ctx, setter, _data| {
                 egui::CentralPanel::default().show(egui_ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.heading(
-                            egui::RichText::new("WAVEFOLDER DISTORTION")
-                                .strong()
-                                .size(20.0),
-                        );
+                        ui.horizontal_top(|ui| {
+                            let text = "WAVEFOLDER DISTORTION";
+                            let a = text.len() as f32;
+                            for (index, val) in text.chars().enumerate() {
+                                ui.label(
+                                    egui::RichText::new(String::from(val))
+                                        .italics()
+                                        .strong()
+                                        .color(Color32::from_rgb(
+                                            ((1.0 - index as f32 / a) * 255.0) as u8,
+                                            ((index as f32 / a) * 255.0) as u8,
+                                            ((1.0 - index as f32 / a) * 255.0) as u8,
+                                        )),
+                                );
+                            }
+                        })
                     });
 
                     ui.add_space(15.0);
 
                     let available_width = ui.available_width();
 
-                    let (rect, response) = ui
-                        .allocate_at_least(egui::vec2(available_width, 120.0), egui::Sense::drag());
+                    let (rect, response) = ui.allocate_at_least(
+                        egui::vec2(available_width, GRAPH_HEIGHT),
+                        egui::Sense::drag(),
+                    );
 
                     if response.dragged() {
                         let delta_x = response.drag_delta().x;
 
-                        let phase_delta = -(delta_x / rect.width())
-                            * params.gain.value().log(2.0).max(4.0)
+                        let phase_delta = (delta_x / rect.width())
+                            * utils::db_to_gain(params.gain.value()).max(4.0)
                             * 12.0;
 
                         let mut new_phase = params.phase.value() - phase_delta;
 
                         new_phase = new_phase.rem_euclid(360.0);
 
-                        // Устанавливаем новое значение через setter
                         setter.begin_set_parameter(&params.phase);
                         setter.set_parameter(&params.phase, new_phase);
                         setter.end_set_parameter(&params.phase);
                     }
 
                     if response.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                         let scroll_delta =
                             -ui.input(|i| i.smooth_scroll_delta.y + i.raw_scroll_delta.y);
                         let sensitivity = if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
@@ -72,8 +87,6 @@ impl WF {
                     }
 
                     let painter = ui.painter_at(rect);
-
-                    // Фон графика
                     painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(30));
 
                     // Читаем данные из RwLock
@@ -86,7 +99,6 @@ impl WF {
                         let height_scale = rect.height() * 0.4;
                         let width = rect.width();
 
-                        // --- 1. БЕЛЫЕ ОСИ (каждые 30°) ---
                         let grid_stroke =
                             egui::Stroke::new(0.5, egui::Color32::from_white_alpha(50));
                         for x in [-1.25, -1.0, -0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1.0, 1.25] {
@@ -107,7 +119,6 @@ impl WF {
                                 ZERO_CROSSING_LINE_TEXT_COLOR,
                             );
                         }
-                        // Горизонтальная ось Y=0
                         painter.line_segment(
                             [
                                 egui::pos2(rect.left(), mid_y),
@@ -124,9 +135,9 @@ impl WF {
                             let t = 10.0
                                 * (i as f32 / width - 0.5)
                                 * utils::db_to_gain(params.gain.value())
-                                - params.phase.value() / 90.0;
+                                + params.phase.value() / 90.0; // ???
 
-                            let func = match params.waveform.value() {
+                            let sample = match params.waveform.value() {
                                 0 => utils::sine(t),
                                 1 => utils::triangle(t),
                                 2 => utils::saw(t),
@@ -139,12 +150,6 @@ impl WF {
                                 _ => utils::sine(t),
                             };
 
-                            let sample = utils::xfader(
-                                (i as f32 / width - 0.5) * 2.5,
-                                func,
-                                params.dw.value(),
-                            );
-
                             let x = rect.left() + i as f32;
                             let y = mid_y - (sample * height_scale);
                             points.push(egui::pos2(x, y));
@@ -152,40 +157,166 @@ impl WF {
 
                         {
                             let x = rect.left() + rect.width() / 2.0;
-                            // Рисуем вертикальную линию
                             painter.line_segment(
                                 [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
                                 egui::Stroke::new(1.0, PHASE_LINE_COLOR.linear_multiply(0.5)),
                             );
                         }
 
-                        // --- 3. САМА ЛИНИЯ ГРАФИКА ---
                         painter.add(egui::Shape::line(
                             points,
                             egui::Stroke::new(2.0, GRAPH_LINE_COLOR),
                         ));
                     }
 
+                    ui.add_space(10.0);
+
+                    {
+                        //графики rjvgjpbwbb функции к синусоиде([-pi;pi]) и линейной функции ([-1;1])
+                        ui.columns(2, |cols| {
+                            // Первая колонка
+                            cols[0].vertical_centered(|ui| {
+                                ui.group(|ui| {
+                                    ui.label("composition to sine");
+                                    let available_width = ui.available_width();
+                                    let (rect, _response) = ui.allocate_at_least(
+                                        egui::vec2(available_width, GRAPH_HEIGHT),
+                                        egui::Sense::focusable_noninteractive(),
+                                    );
+
+                                    let mid_y = rect.center().y;
+                                    let height_scale = rect.height() * 0.4;
+                                    let width = rect.width();
+
+                                    let painter = ui.painter_at(rect);
+                                    painter.rect_filled(
+                                        rect,
+                                        4.0,
+                                        egui::Color32::from_black_alpha(30),
+                                    );
+                                    let mut points = vec![];
+
+                                    for i in 0..width as usize {
+                                        let x =
+                                            (2.0 * std::f32::consts::PI * (i as f32 / width - 0.5))
+                                                .sin();
+                                        let t = x * utils::db_to_gain(params.gain.value())
+                                            + params.phase.value() / 4.0;
+
+                                        let func = match params.waveform.value() {
+                                            0 => utils::sine(t),
+                                            1 => utils::triangle(t),
+                                            2 => utils::saw(t),
+                                            3 => utils::meander(t),
+                                            4 => utils::lookup_custom(
+                                                samples,
+                                                t,
+                                                params.interpolation_method.value(),
+                                            ),
+                                            _ => utils::sine(t),
+                                        };
+
+                                        let sample = utils::xfader(x, func, params.dw.value());
+
+                                        let x = rect.left() + i as f32;
+                                        let y = mid_y - (sample * height_scale);
+                                        points.push(egui::pos2(x, y));
+                                    }
+
+                                    painter.add(egui::Shape::line(
+                                        points,
+                                        egui::Stroke::new(2.0, GRAPH_LINE_COLOR),
+                                    ));
+                                });
+                            });
+
+                            // Вторая колонка
+                            cols[1].vertical_centered(|ui| {
+                                ui.group(|ui| {
+                                    ui.label("composition to linear function");
+                                    let available_width = ui.available_width();
+
+                                    let (rect, _response) = ui.allocate_at_least(
+                                        egui::vec2(available_width, GRAPH_HEIGHT),
+                                        egui::Sense::focusable_noninteractive(),
+                                    );
+
+                                    let mid_y = rect.center().y;
+                                    let height_scale = rect.height() * 0.4;
+                                    let width = rect.width();
+
+                                    let painter = ui.painter_at(rect);
+                                    painter.rect_filled(
+                                        rect,
+                                        4.0,
+                                        egui::Color32::from_black_alpha(30),
+                                    );
+                                    let mut points = vec![];
+                                    for i in 0..width as usize {
+                                        let x = 2.0 * i as f32 / width - 1.0;
+                                        let t = x * utils::db_to_gain(params.gain.value())
+                                            + params.phase.value() / 4.0;
+
+                                        let func = match params.waveform.value() {
+                                            0 => utils::sine(t),
+                                            1 => utils::triangle(t),
+                                            2 => utils::saw(t),
+                                            3 => utils::meander(t),
+                                            4 => utils::lookup_custom(
+                                                samples,
+                                                t,
+                                                params.interpolation_method.value(),
+                                            ),
+                                            _ => utils::sine(t),
+                                        };
+
+                                        let sample = utils::xfader(x, func, params.dw.value());
+
+                                        let x = rect.left() + i as f32;
+                                        let y = mid_y - (sample * height_scale);
+                                        points.push(egui::pos2(x, y));
+                                    }
+
+                                    painter.add(egui::Shape::line(
+                                        points,
+                                        egui::Stroke::new(2.0, GRAPH_LINE_COLOR),
+                                    ));
+                                });
+                            });
+                        });
+                    }
+
+                    ui.add_space(10.0);
+
                     // Слайдеры
                     let slider_size = egui::vec2(ui.available_width(), 20.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Dry/Wet"));
+                        ui.add_sized(
+                            slider_size,
+                            widgets::ParamSlider::for_param(&params.dw, setter),
+                        );
+                    });
+                    ui.add_space(5.0);
 
-                    ui.label(egui::RichText::new("Dry/Wet"));
-                    ui.add_sized(
-                        slider_size,
-                        widgets::ParamSlider::for_param(&params.dw, setter),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Drive"));
+
+                        ui.add_sized(
+                            slider_size,
+                            widgets::ParamSlider::for_param(&params.gain, setter),
+                        );
+                    });
+
                     ui.add_space(5.0);
-                    ui.label(egui::RichText::new("Drive"));
-                    ui.add_sized(
-                        slider_size,
-                        widgets::ParamSlider::for_param(&params.gain, setter),
-                    );
-                    ui.add_space(5.0);
-                    ui.label(egui::RichText::new("Phase"));
-                    ui.add_sized(
-                        slider_size,
-                        widgets::ParamSlider::for_param(&params.phase, setter),
-                    );
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Phase"));
+                        ui.add_sized(
+                            slider_size,
+                            widgets::ParamSlider::for_param(&params.phase, setter),
+                        );
+                    });
 
                     ui.horizontal(|ui| {
                         // --- 2. РАДИОКНОПКИ ВЫБОРА ВОЛНЫ ---
@@ -229,18 +360,21 @@ impl WF {
                         }
                     });
 
-                    ui.label("Interpolation Method:");
                     ui.horizontal_wrapped(|ui| {
-                        let mut current_wave = params.interpolation_method.value();
+                        ui.group(|ui| {
+                            ui.label("Interpolation Method:");
+                            let mut current_wave = params.interpolation_method.value();
 
-                        // Создаем радиокнопки для каждого типа
-                        for (val, label) in [(0, "Linear"), (1, "Sine")] {
-                            if ui.radio_value(&mut current_wave, val, label).changed() {
-                                setter.begin_set_parameter(&params.interpolation_method);
-                                setter.set_parameter(&params.interpolation_method, current_wave);
-                                setter.end_set_parameter(&params.interpolation_method);
+                            // Создаем радиокнопки для каждого типа
+                            for (val, label) in [(0, "Linear"), (1, "Sine")] {
+                                if ui.radio_value(&mut current_wave, val, label).changed() {
+                                    setter.begin_set_parameter(&params.interpolation_method);
+                                    setter
+                                        .set_parameter(&params.interpolation_method, current_wave);
+                                    setter.end_set_parameter(&params.interpolation_method);
+                                }
                             }
-                        }
+                        });
                     });
                 });
             },

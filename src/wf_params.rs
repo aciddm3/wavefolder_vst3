@@ -73,7 +73,7 @@ impl Default for WFParams {
                 .to_string()
             })),
             waveform_path: RwLock::new(String::new()),
-            editor_state: EguiState::from_size(740, 475),
+            editor_state: EguiState::from_size(740, 550),
         }
     }
 }

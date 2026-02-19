@@ -4,7 +4,7 @@ use nih_plug::wrapper::vst3::subcategories::Vst3SubCategory; // Импортир
 use std::sync::Arc;
 
 
-mod gui; // TODO impl gui in other file 
+mod gui;
 mod utils;
 mod wav_reader;
 mod wf_background_task;

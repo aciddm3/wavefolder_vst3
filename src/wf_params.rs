@@ -19,6 +19,12 @@ pub struct WFParams {
     pub waveform: IntParam,
     #[id = "interpolation_method"]
     pub interpolation_method: IntParam,
+    #[id = "bias"]
+    pub bias: FloatParam,
+    #[id = "func_gain"]
+    pub func_gain: FloatParam,
+    #[id = "output_clipping_enable"]
+    pub clipping_enable: BoolParam,
     #[persist = "waveform_path"]
     pub waveform_path: RwLock<String>,
     #[persist = "editor-state"]
@@ -74,6 +80,23 @@ impl Default for WFParams {
             })),
             waveform_path: RwLock::new(String::new()),
             editor_state: EguiState::from_size(740, 550),
+            bias: FloatParam::new(
+                "Bias",
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            ),
+            func_gain: FloatParam::new(
+                "Dry post gain",
+                0.0,
+                FloatRange::Linear {
+                    min: MIN_GAIN,
+                    max: MAX_GAIN,
+                },
+            ),
+            clipping_enable: BoolParam::new("Clipping enable", true),
         }
     }
 }

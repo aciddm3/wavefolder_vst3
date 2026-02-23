@@ -3,7 +3,7 @@ use nih_plug::prelude::*; // Импортируем все необходимы�
 use nih_plug::wrapper::vst3::subcategories::Vst3SubCategory; // Импортируем Vst3SubCategory из правильного пути
 use std::sync::Arc;
 
-
+mod func;
 mod gui;
 mod utils;
 mod wav_reader;
@@ -72,26 +72,24 @@ impl Plugin for WF {
 
         for channel_samples in buffer.as_slice() {
             for sample in channel_samples.iter_mut() {
-                let gain = utils::db_to_gain(self.params.gain.smoothed.next());
-                let phase_offset = self.params.phase.smoothed.next() / 90.0;
                 let dry_wet = self.params.dw.smoothed.next();
 
-                let input_folded = *sample * gain + phase_offset;
+                let wet = func::func(
+                    *sample,
+                    self.params.waveform.value(),
+                    self.params.interpolation_method.value(),
+                    self.params.gain.smoothed.next(),
+                    self.params.phase.smoothed.next() / 90.0,
+                    self.params.func_gain.smoothed.next(),
+                    self.params.bias.smoothed.next(),
+                    custom_table,
+                );
 
-                let wet = match self.params.waveform.value() {
-                    0 => utils::sine(input_folded),
-                    1 => utils::triangle(input_folded),
-                    2 => utils::saw(input_folded),
-                    3 => utils::meander(input_folded),
-                    4 => utils::lookup_custom(
-                        custom_table,
-                        input_folded,
-                        self.params.interpolation_method.value(),
-                    ),
-                    _ => utils::sine(input_folded),
-                };
-
-                *sample = utils::xfader(*sample, wet, dry_wet);
+                *sample = if self.params.clipping_enable.value() {
+                    utils::xfader(*sample, wet, dry_wet).clamp(-1.0, 1.0)
+                } else {
+                    utils::xfader(*sample, wet, dry_wet)
+                }
             }
         }
 

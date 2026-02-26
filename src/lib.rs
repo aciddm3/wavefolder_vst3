@@ -25,8 +25,8 @@ impl Plugin for WF {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: NonZeroU32::new(1),
-        main_output_channels: NonZeroU32::new(1),
+        main_input_channels: NonZeroU32::new(2),
+        main_output_channels: NonZeroU32::new(2),
         aux_input_ports: &[],
         aux_output_ports: &[],
         names: PortNames::const_default(),
@@ -67,28 +67,40 @@ impl Plugin for WF {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+
+        let num_samples = buffer.samples();
         let table_lock = self.custom_waveform.read();
         let custom_table = &**table_lock; // &[f32]
 
-        for channel_samples in buffer.as_slice() {
-            for sample in channel_samples.iter_mut() {
-                let dry_wet = self.params.dw.smoothed.next();
+        for sample_index in 0..num_samples {
+            let dry_wet = self.params.dw.smoothed.next();
 
+            let func_parameters = (
+                self.params.waveform.value(),
+                self.params.interpolation_method.value(),
+                self.params.gain.smoothed.next(),
+                self.params.phase.smoothed.next() / 90.0,
+                self.params.func_gain.smoothed.next(),
+                self.params.bias.smoothed.next(),
+            );
+
+            let clipping_enable = self.params.clipping_enable.value();
+
+            for channel in buffer.as_slice() {
                 let wet = func::func(
-                    *sample,
-                    self.params.waveform.value(),
-                    self.params.interpolation_method.value(),
-                    self.params.gain.smoothed.next(),
-                    self.params.phase.smoothed.next() / 90.0,
-                    self.params.func_gain.smoothed.next(),
-                    self.params.bias.smoothed.next(),
+                    channel[sample_index],
+                    func_parameters.0,
+                    func_parameters.1,
+                    func_parameters.2,
+                    func_parameters.3,
+                    func_parameters.4,
+                    func_parameters.5,
                     custom_table,
                 );
-
-                *sample = if self.params.clipping_enable.value() {
-                    utils::xfader(*sample, wet, dry_wet).clamp(-1.0, 1.0)
+                channel[sample_index] = if clipping_enable {
+                    utils::xfader(channel[sample_index], wet, dry_wet).clamp(-1.0, 1.0)
                 } else {
-                    utils::xfader(*sample, wet, dry_wet)
+                    utils::xfader(channel[sample_index], wet, dry_wet)
                 }
             }
         }

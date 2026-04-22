@@ -3,10 +3,12 @@ use nih_plug::prelude::*; // Импортируем все необходимы�
 use nih_plug::wrapper::vst3::subcategories::Vst3SubCategory; // Импортируем Vst3SubCategory из правильного пути
 use std::sync::Arc;
 
+mod biquad;
+mod file_reader;
 mod func;
 mod gui;
+mod interpolation;
 mod utils;
-mod wav_reader;
 mod wf_background_task;
 mod wf_params;
 mod wf_struct;
@@ -43,13 +45,26 @@ impl Plugin for WF {
 
     fn initialize(
         &mut self,
-        _audio_io_layout: &AudioIOLayout,
-        _buffer_config: &BufferConfig,
+        audio_io_layout: &AudioIOLayout,
+        buffer_config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
+        let a = self.params.clone();
+
         self.last_open_file_state = false;
 
+        let num_channels = if let Some(val) = audio_io_layout.main_input_channels {
+            val.get()
+        } else {
+            2
+        } as usize;
+
+        *self = Self::new(buffer_config.sample_rate, 4, num_channels);
+
         let default_table = (-1..=1).map(|s| s as f32).collect::<Vec<_>>();
+
+        self.params = a;
+
         *self.custom_waveform.write() = Arc::new(default_table);
         let path = self.params.waveform_path.read().clone();
         if !path.is_empty() {
@@ -67,41 +82,51 @@ impl Plugin for WF {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-
         let num_samples = buffer.samples();
         let table_lock = self.custom_waveform.read();
         let custom_table = &**table_lock; // &[f32]
 
         for sample_index in 0..num_samples {
             let dry_wet = self.params.dw.smoothed.next();
-
-            let func_parameters = (
-                self.params.waveform.value(),
-                self.params.interpolation_method.value(),
-                self.params.gain.smoothed.next(),
-                self.params.phase.smoothed.next() / 90.0,
-                self.params.func_gain.smoothed.next(),
-                self.params.bias.smoothed.next(),
-            );
-
+            let waveform_type = self.params.waveform.value();
+            let interpolation_method = self.params.interpolation_method.value();
+            let drive = self.params.gain.smoothed.next();
+            let phase = self.params.phase.smoothed.next();
+            let func_gain = self.params.func_gain.smoothed.next();
+            let bias = self.params.bias.smoothed.next();
             let clipping_enable = self.params.clipping_enable.value();
 
-            for channel in buffer.as_slice() {
-                let wet = func::func(
-                    channel[sample_index],
-                    func_parameters.0,
-                    func_parameters.1,
-                    func_parameters.2,
-                    func_parameters.3,
-                    func_parameters.4,
-                    func_parameters.5,
-                    custom_table,
-                );
-                channel[sample_index] = if clipping_enable {
-                    utils::xfader(channel[sample_index], wet, dry_wet).clamp(-1.0, 1.0)
-                } else {
-                    utils::xfader(channel[sample_index], wet, dry_wet)
+            for (channel_idx, channel) in buffer.as_slice().iter_mut().enumerate() {
+                self.resamplers[channel_idx].push_sample(channel[sample_index]);
+                for jndex in 0..self.oversampling {
+                    let mut wet = self.resamplers[channel_idx].get_phase(jndex);
+
+                    // processing
+                    wet = func::func(
+                        wet,
+                        waveform_type,
+                        interpolation_method,
+                        drive,
+                        phase,
+                        func_gain,
+                        bias,
+                        custom_table,
+                    );
+
+                    if clipping_enable {
+                        wet = wet.clamp(-1.0, 1.0)
+                    }
+                    // processing end
+
+                    wet = self.anti_al_filter1[channel_idx].process(wet);
+                    wet = self.anti_al_filter2[channel_idx].process(wet);
+                    self.decimators[channel_idx].process_oversampled(wet);
                 }
+                channel[sample_index] = utils::xfader(
+                    channel[sample_index],
+                    self.decimators[channel_idx].get_output(),
+                    dry_wet,
+                );
             }
         }
 
@@ -111,24 +136,28 @@ impl Plugin for WF {
     fn task_executor(&mut self) -> TaskExecutor<Self> {
         let params = self.params.clone();
         let custom_waveform = self.custom_waveform.clone();
-        Box::new(move |task| {
-            match task {
-                WFBackgroundTask::LoadFileNoDialog => {
-                    let path_str = params.waveform_path.read().clone();
-                    if !path_str.is_empty() {
-                        // Здесь вызываем загрузку (внутри будет lock.write())
-                        wav_reader::process_wav_from_path(&path_str, &custom_waveform);
+        Box::new(move |task| match task {
+            WFBackgroundTask::LoadFileNoDialog => {
+                let path_str = params.waveform_path.read().clone();
+                if !path_str.is_empty() {
+                    if let Err(e) = file_reader::process_file_from_path(&path_str, &custom_waveform)
+                    {
+                        nih_log!("{e}");
                     }
                 }
-                WFBackgroundTask::LoadFile => {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("WAV", &["wav"])
-                        .pick_file()
+            }
+            WFBackgroundTask::LoadFile => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("WAV, FLAC, OGG", &["wav", "flac", "ogg"])
+                    .pick_file()
+                {
+                    let path_str = path.to_string_lossy().into_owned();
+
+                    if let Err(e) = file_reader::process_file_from_path(&path_str, &custom_waveform)
                     {
-                        let path_str = path.to_string_lossy().into_owned();
-                        wav_reader::process_wav_from_path(&path_str, &custom_waveform);
-                        *params.waveform_path.write() = path_str;
+                        nih_log!("{e}");
                     }
+                    *params.waveform_path.write() = path_str;
                 }
             }
         })

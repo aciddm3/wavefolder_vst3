@@ -2,7 +2,7 @@
 
 ## Definition
 
-Let $f: \mathbb{R} \rightarrow [-1;1]$ is a periodic function. Wavefolder distortion is just calculating $f( D*I + P)$
+Let $f: \mathbb{R} \rightarrow [-1;1]$ is a periodic function. Wavefolder distortion is just calculating $f(DI + P)$
 
 $D$ is the drive amount,
 
@@ -27,11 +27,11 @@ Each has period of 4.
 
 You can load a function table from a .wav file. The function will have period of 4.
 
-There is graph of the function. You may see zero-crossing points of function and choose it as a phase of the function.
+There is graph of the function and function composition to sine and to linear function.
 
 ## TODO
 
 - [ ] Add sample edit features
-- [ ] Add other formats support (.flac, .ogg, .mp3)
-- [ ] Add other interpolation methods
-- [ ] Add better phase visualization
+- [x] Add other formats support (.flac, .ogg)
+- [x] Add other interpolation methods
+- [x] Add better phase visualization

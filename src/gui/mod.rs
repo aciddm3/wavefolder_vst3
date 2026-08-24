@@ -48,8 +48,8 @@ impl WF {
                 // Отправляем на отрисовку
                 painter.add(egui::Shape::mesh(mesh));
 
-                let table_guard = waveform_arc.read();
-                let samples = &**table_guard;
+                let samples =
+                    &waveform_arc.read().samples[waveform_arc.read().get_current_channel()];
 
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
@@ -67,7 +67,7 @@ impl WF {
                         // график функции
                         ui.group(|ui| {
                             ui.label("graph of the function");
-                            draw_graph(ui, samples, setter, params.clone());
+                            draw_graph(ui, &samples, setter, params.clone());
                         });
                         ui.add_space(10.0);
 
@@ -77,7 +77,7 @@ impl WF {
                             cols[0].vertical_centered(|ui| {
                                 ui.group(|ui| {
                                     ui.label("composition to sine");
-                                    draw_graph_composition(ui, samples, params.clone(), |x| {
+                                    draw_graph_composition(ui, &samples, params.clone(), |x| {
                                         (x * std::f32::consts::PI).sin()
                                     })
                                 });
@@ -87,7 +87,7 @@ impl WF {
                             cols[1].vertical_centered(|ui| {
                                 ui.group(|ui| {
                                     ui.label("composition to linear function");
-                                    draw_graph_composition(ui, samples, params.clone(), |x| x)
+                                    draw_graph_composition(ui, &samples, params.clone(), |x| x)
                                 });
                             });
                         });
@@ -166,13 +166,32 @@ impl WF {
                                             params.phase.value(),
                                             params.func_gain.value(),
                                             0.0,
-                                            samples,
+                                            &samples,
                                         );
                                         setter.begin_set_parameter(&params.bias);
                                         setter.set_parameter(&params.bias, value_to_set);
                                         setter.end_set_parameter(&params.bias);
                                     }
                                 });
+                            });
+                        });
+
+                        ui.horizontal_wrapped(|ui| {
+                            ui.group(|ui| {
+                                ui.label("Interpolation Method:");
+                                let mut current_wave = params.interpolation_method.value();
+
+                                // Создаем радиокнопки для каждого типа
+                                for (val, label) in [(0, "Linear"), (1, "Sine")] {
+                                    if ui.radio_value(&mut current_wave, val, label).changed() {
+                                        setter.begin_set_parameter(&params.interpolation_method);
+                                        setter.set_parameter(
+                                            &params.interpolation_method,
+                                            current_wave,
+                                        );
+                                        setter.end_set_parameter(&params.interpolation_method);
+                                    }
+                                }
                             });
                         });
 
@@ -198,41 +217,51 @@ impl WF {
                                     }
                                 });
                             });
-
-                            ui.horizontal(|ui| {
-                                if ui.button("Load file").clicked() {
-                                    async_executor.execute_background(WFBackgroundTask::LoadFile);
-                                }
-                            });
-
-                            // Вывод текущего пути (если есть)
-                            let path = params.waveform_path.read();
-                            if !path.is_empty() {
-                                let filename = std::path::Path::new(&*path)
-                                    .file_name()
-                                    .and_then(|f| f.to_str())
-                                    .unwrap_or("Unknown");
-                                ui.label(egui::RichText::new(filename).italics().size(10.0));
-                            }
-                        });
-
-                        ui.horizontal_wrapped(|ui| {
-                            ui.group(|ui| {
-                                ui.label("Interpolation Method:");
-                                let mut current_wave = params.interpolation_method.value();
-
-                                // Создаем радиокнопки для каждого типа
-                                for (val, label) in [(0, "Linear"), (1, "Sine")] {
-                                    if ui.radio_value(&mut current_wave, val, label).changed() {
-                                        setter.begin_set_parameter(&params.interpolation_method);
-                                        setter.set_parameter(
-                                            &params.interpolation_method,
-                                            current_wave,
-                                        );
-                                        setter.end_set_parameter(&params.interpolation_method);
+                            if params.waveform.value() == 4 {
+                                ui.horizontal(|ui| {
+                                    if ui.button("Load file").clicked() {
+                                        async_executor
+                                            .execute_background(WFBackgroundTask::LoadFile);
                                     }
-                                }
-                            });
+
+                                    // Вывод текущего пути (если есть)
+                                    let path = params.waveform_path.read();
+                                    if !path.is_empty() {
+                                        let filename = std::path::Path::new(&*path)
+                                            .file_name()
+                                            .and_then(|f| f.to_str())
+                                            .unwrap_or("Unknown");
+                                        ui.label(
+                                            egui::RichText::new(filename).italics().size(10.0),
+                                        );
+                                    }
+                                });
+
+                                ui.horizontal(|ui| {
+                                    let channel_count;
+                                    let current_channel;
+                                    {
+                                        let reader = waveform_arc.read();
+                                        channel_count = reader.get_channel_count();
+                                        current_channel = reader.get_current_channel();
+                                        ui.label(format!(
+                                            "Number of file channel {} / {}  ",
+                                            current_channel + 1,
+                                            channel_count
+                                        ));
+                                    }
+                                    if ui.button("-").clicked() {
+                                        async_executor.execute_background(
+                                            WFBackgroundTask::ChangeDecodedAudioChannel(-1),
+                                        );
+                                    }
+                                    if ui.button("+").clicked() {
+                                        async_executor.execute_background(
+                                            WFBackgroundTask::ChangeDecodedAudioChannel(1),
+                                        );
+                                    }
+                                });
+                            }
                         });
                     });
             },

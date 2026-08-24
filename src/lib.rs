@@ -4,7 +4,7 @@ use nih_plug::wrapper::vst3::subcategories::Vst3SubCategory; // Импортир
 use std::sync::Arc;
 
 mod biquad;
-mod file_reader;
+mod decoded_audio;
 mod func;
 mod gui;
 mod interpolation;
@@ -13,6 +13,7 @@ mod wf_background_task;
 mod wf_params;
 mod wf_struct;
 
+use crate::decoded_audio::DecodedAudio;
 use crate::wf_background_task::WFBackgroundTask;
 use crate::wf_struct::WF;
 
@@ -61,11 +62,9 @@ impl Plugin for WF {
 
         *self = Self::new(buffer_config.sample_rate, 4, num_channels);
 
-        let default_table = (-1..=1).map(|s| s as f32).collect::<Vec<_>>();
-
         self.params = a;
 
-        *self.custom_waveform.write() = Arc::new(default_table);
+        *self.custom_waveform.write() = DecodedAudio::default();
         let path = self.params.waveform_path.read().clone();
         if !path.is_empty() {
             context.execute(WFBackgroundTask::LoadFileNoDialog);
@@ -84,7 +83,7 @@ impl Plugin for WF {
     ) -> ProcessStatus {
         let num_samples = buffer.samples();
         let table_lock = self.custom_waveform.read();
-        let custom_table = &**table_lock; // &[f32]
+        let custom_table = &*table_lock; // &[f32]
 
         for sample_index in 0..num_samples {
             let dry_wet = self.params.dw.smoothed.next();
@@ -110,7 +109,7 @@ impl Plugin for WF {
                         phase,
                         func_gain,
                         bias,
-                        custom_table,
+                        custom_table.samples[custom_table.get_current_channel()].as_slice(),
                     );
 
                     if clipping_enable {
@@ -140,8 +139,10 @@ impl Plugin for WF {
             WFBackgroundTask::LoadFileNoDialog => {
                 let path_str = params.waveform_path.read().clone();
                 if !path_str.is_empty() {
-                    if let Err(e) = file_reader::process_file_from_path(&path_str, &custom_waveform)
-                    {
+                    if let Err(e) = decoded_audio::process_file::process_file_from_path(
+                        &path_str,
+                        &custom_waveform,
+                    ) {
                         nih_log!("{e}");
                     }
                 }
@@ -153,12 +154,21 @@ impl Plugin for WF {
                 {
                     let path_str = path.to_string_lossy().into_owned();
 
-                    if let Err(e) = file_reader::process_file_from_path(&path_str, &custom_waveform)
-                    {
+                    if let Err(e) = decoded_audio::process_file::process_file_from_path(
+                        &path_str,
+                        &custom_waveform,
+                    ) {
                         nih_log!("{e}");
                     }
                     *params.waveform_path.write() = path_str;
                 }
+            }
+            WFBackgroundTask::ChangeDecodedAudioChannel(channel_delta) => {
+                let channels_count = custom_waveform.read().get_channel_count() as isize;
+                let current_channel = custom_waveform.read().get_current_channel() as isize;
+                custom_waveform.write().set_audio_channel(
+                    (current_channel as isize + channel_delta).clamp(0, channels_count-1) as usize,
+                );
             }
         })
     }
